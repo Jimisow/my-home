@@ -14,6 +14,20 @@ import { escapeHtml, formatDateTime } from "../utils.js";
 import { showToast } from "../components/toast.js";
 
 const STATUS_LABEL = { full: "🟢 Plein", almost: "🟠 Presque fini", empty: "🔴 Vide" };
+const CATEGORIES = ["Fruits & Legumes", "Viande & Poisson", "Cremerie", "Sec", "Surgeles", "Boissons", "Hygiene", "Entretien", "Enfant", "Animaux", "Autre"];
+const CATEGORY_ICON = {
+  "Fruits & Legumes": "🥦",
+  "Viande & Poisson": "🥩",
+  "Cremerie": "🧀",
+  "Sec": "🥫",
+  "Surgeles": "🧊",
+  "Boissons": "🥤",
+  "Hygiene": "🧴",
+  "Entretien": "🧽",
+  "Enfant": "🍼",
+  "Animaux": "🐾",
+  "Autre": "📦"
+};
 
 function mount(root) {
   root.innerHTML = `
@@ -24,10 +38,23 @@ function mount(root) {
         <button id="add-product-btn" class="btn btn-primary">➕ Ajouter</button>
       </div>
       <div class="filter-bar">
-        <button data-filter="all" class="filter-btn active">Tous</button>
-        <button data-filter="full" class="filter-btn">🟢 Pleins</button>
-        <button data-filter="almost" class="filter-btn">🟠 Presque</button>
-        <button data-filter="empty" class="filter-btn">🔴 Vides</button>
+        <button type="button" data-filter-mode="all" class="filter-btn active">Tous</button>
+        <div class="filter-dropdown">
+          <button type="button" id="category-filter-btn" class="filter-btn">Categorie</button>
+          <div id="category-menu" class="filter-menu hidden">
+            <button type="button" class="filter-menu-item active" data-value="all">Toutes les categories</button>
+            ${CATEGORIES.map((c) => `<button type="button" class="filter-menu-item" data-value="${c}">${CATEGORY_ICON[c]} ${c}</button>`).join("")}
+          </div>
+        </div>
+        <div class="filter-dropdown">
+          <button type="button" id="status-filter-btn" class="filter-btn">Statut</button>
+          <div id="status-menu" class="filter-menu hidden">
+            <button type="button" class="filter-menu-item active" data-value="all">Tous les statuts</button>
+            <button type="button" class="filter-menu-item" data-value="full">🟢 Plein</button>
+            <button type="button" class="filter-menu-item" data-value="almost">🟠 Presque fini</button>
+            <button type="button" class="filter-menu-item" data-value="empty">🔴 Vide</button>
+          </div>
+        </div>
       </div>
       <div id="products-list" class="products-grid">
         <p class="empty-state">Chargement...</p>
@@ -44,6 +71,11 @@ function mount(root) {
           <input type="hidden" id="product-id" />
           <label>Nom
             <input type="text" id="product-name" required placeholder="Lait" />
+          </label>
+          <label>Categorie
+            <select id="product-category">
+              ${CATEGORIES.map((c) => `<option value="${c}">${CATEGORY_ICON[c]} ${c}</option>`).join("")}
+            </select>
           </label>
           <label class="checkbox-label">
             <input type="checkbox" id="product-has-quantity" checked /> Produit quantifiable
@@ -89,7 +121,8 @@ function mount(root) {
   `;
 
   let products = [];
-  let currentFilter = "all";
+  let categoryFilterValue = "all";
+  let statusFilterValue = "all";
   let searchTerm = "";
 
   const listEl = root.querySelector("#products-list");
@@ -99,6 +132,11 @@ function mount(root) {
   const hasQuantityCheckbox = root.querySelector("#product-has-quantity");
   const quantityFields = root.querySelector("#quantity-fields");
   const manualStatusFields = root.querySelector("#manual-status-fields");
+  const allFilterBtn = root.querySelector('.filter-btn[data-filter-mode="all"]');
+  const categoryFilterBtn = root.querySelector("#category-filter-btn");
+  const statusFilterBtn = root.querySelector("#status-filter-btn");
+  const categoryMenu = root.querySelector("#category-menu");
+  const statusMenu = root.querySelector("#status-menu");
 
   hasQuantityCheckbox.addEventListener("change", () => {
     quantityFields.classList.toggle("hidden", !hasQuantityCheckbox.checked);
@@ -110,20 +148,74 @@ function mount(root) {
     renderList();
   });
 
-  root.querySelectorAll(".filter-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      currentFilter = btn.dataset.filter;
-      root.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
+  // Les filtres categorie et statut se combinent (ET logique) : "Tous" les
+  // reinitialise tous les deux, les deux autres restent actifs independamment.
+  function updateFilterButtonsUI() {
+    allFilterBtn.classList.toggle("active", categoryFilterValue === "all" && statusFilterValue === "all");
+    categoryFilterBtn.classList.toggle("active", categoryFilterValue !== "all");
+    statusFilterBtn.classList.toggle("active", statusFilterValue !== "all");
+  }
+
+  allFilterBtn.addEventListener("click", () => {
+    categoryFilterValue = "all";
+    statusFilterValue = "all";
+    categoryFilterBtn.textContent = "Categorie";
+    statusFilterBtn.textContent = "Statut";
+    categoryMenu.querySelectorAll(".filter-menu-item").forEach((item) => item.classList.toggle("active", item.dataset.value === "all"));
+    statusMenu.querySelectorAll(".filter-menu-item").forEach((item) => item.classList.toggle("active", item.dataset.value === "all"));
+    categoryMenu.classList.add("hidden");
+    statusMenu.classList.add("hidden");
+    updateFilterButtonsUI();
+    renderList();
+  });
+
+  categoryFilterBtn.addEventListener("click", () => {
+    statusMenu.classList.add("hidden");
+    categoryMenu.classList.toggle("hidden");
+  });
+
+  statusFilterBtn.addEventListener("click", () => {
+    categoryMenu.classList.add("hidden");
+    statusMenu.classList.toggle("hidden");
+  });
+
+  categoryMenu.querySelectorAll(".filter-menu-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      categoryFilterValue = item.dataset.value;
+      categoryFilterBtn.textContent = categoryFilterValue === "all" ? "Categorie" : item.textContent.trim();
+      categoryMenu.querySelectorAll(".filter-menu-item").forEach((i) => i.classList.toggle("active", i === item));
+      categoryMenu.classList.add("hidden");
+      updateFilterButtonsUI();
       renderList();
     });
   });
+
+  statusMenu.querySelectorAll(".filter-menu-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      statusFilterValue = item.dataset.value;
+      statusFilterBtn.textContent = statusFilterValue === "all" ? "Statut" : item.textContent.trim();
+      statusMenu.querySelectorAll(".filter-menu-item").forEach((i) => i.classList.toggle("active", i === item));
+      statusMenu.classList.add("hidden");
+      updateFilterButtonsUI();
+      renderList();
+    });
+  });
+
+  function closeFilterMenusOnOutsideClick(e) {
+    if (!e.target.closest(".filter-dropdown")) {
+      categoryMenu.classList.add("hidden");
+      statusMenu.classList.add("hidden");
+    }
+  }
+  document.addEventListener("click", closeFilterMenusOnOutsideClick);
+  document.addEventListener("page-changed", () => document.removeEventListener("click", closeFilterMenusOnOutsideClick), { once: true });
 
   function openProductModal(product = null) {
     productForm.reset();
     root.querySelector("#product-modal-title").textContent = product ? "Modifier le produit" : "Ajouter un produit";
     root.querySelector("#product-id").value = product?.id || "";
     root.querySelector("#product-name").value = product?.name || "";
+    root.querySelector("#product-category").value = product?.category || "Autre";
     const hasQuantity = product ? !!product.hasQuantity : true;
     hasQuantityCheckbox.checked = hasQuantity;
     quantityFields.classList.toggle("hidden", !hasQuantity);
@@ -148,6 +240,7 @@ function mount(root) {
     const id = root.querySelector("#product-id").value;
     const data = {
       name: root.querySelector("#product-name").value,
+      category: root.querySelector("#product-category").value,
       hasQuantity: hasQuantityCheckbox.checked,
       quantity: root.querySelector("#product-quantity").value,
       threshold: root.querySelector("#product-threshold").value,
@@ -170,7 +263,8 @@ function mount(root) {
   });
 
   function matchesFilter(product) {
-    if (currentFilter !== "all" && product.status !== currentFilter) return false;
+    if (categoryFilterValue !== "all" && (product.category || "Autre") !== categoryFilterValue) return false;
+    if (statusFilterValue !== "all" && product.status !== statusFilterValue) return false;
     if (searchTerm && !product.name.toLowerCase().includes(searchTerm)) return false;
     return true;
   }
@@ -205,10 +299,12 @@ function mount(root) {
            <button data-action="status-empty" data-id="${product.id}" class="${product.status === "empty" ? "active" : ""}">🔴</button>
          </div>`;
 
+    const category = product.category || "Autre";
     card.innerHTML = `
       <div class="product-card-header">
         <span class="status-dot"></span>
         <strong>${escapeHtml(product.name)}</strong>
+        <span class="product-category-tag">${CATEGORY_ICON[category] || "📦"} ${escapeHtml(category)}</span>
       </div>
       ${quantityInfo}
       <div class="product-meta">Modifie par ${escapeHtml(product.updatedBy || "")} · ${formatDateTime(product.updatedAt)}</div>
@@ -260,18 +356,30 @@ function mount(root) {
       return;
     }
     shoppingListEl.innerHTML = "";
+    const groups = new Map();
     toBuy.forEach((product) => {
-      const row = document.createElement("label");
-      row.className = "shopping-item";
-      row.innerHTML = `
-        <input type="checkbox" data-id="${product.id}" ${checkedIds.has(product.id) ? "checked" : ""} />
-        <span>${STATUS_LABEL[product.status]} ${escapeHtml(product.name)}</span>
-      `;
-      row.querySelector("input").addEventListener("change", (e) => {
-        if (e.target.checked) checkedIds.add(product.id);
-        else checkedIds.delete(product.id);
+      const category = product.category || "Autre";
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category).push(product);
+    });
+    CATEGORIES.filter((c) => groups.has(c)).forEach((category) => {
+      const section = document.createElement("div");
+      section.className = "shopping-group";
+      section.innerHTML = `<h3 class="shopping-group-title">${CATEGORY_ICON[category]} ${escapeHtml(category)}</h3>`;
+      groups.get(category).forEach((product) => {
+        const row = document.createElement("label");
+        row.className = "shopping-item";
+        row.innerHTML = `
+          <input type="checkbox" data-id="${product.id}" ${checkedIds.has(product.id) ? "checked" : ""} />
+          <span>${STATUS_LABEL[product.status]} ${escapeHtml(product.name)}</span>
+        `;
+        row.querySelector("input").addEventListener("change", (e) => {
+          if (e.target.checked) checkedIds.add(product.id);
+          else checkedIds.delete(product.id);
+        });
+        section.appendChild(row);
       });
-      shoppingListEl.appendChild(row);
+      shoppingListEl.appendChild(section);
     });
   }
 

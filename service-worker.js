@@ -1,5 +1,5 @@
 // Service worker : cache l'app shell pour un fonctionnement hors-ligne
-const CACHE_NAME = "my-home-v2";
+const CACHE_NAME = "my-home-v11";
 const APP_SHELL = [
   "./",
   "./index.html",

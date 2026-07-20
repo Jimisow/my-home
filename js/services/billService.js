@@ -34,16 +34,39 @@ function rollDueDateToCurrentMonth(dueDate) {
 
 const rolloverInFlight = new Set();
 
+// Pour un echeancier (paiement echelonne), le cycle mensuel s'arrete de lui-meme
+// une fois le total rembourse ou la date de fin depassee : on ne relance plus le
+// rollover, la facture reste sur son dernier etat ("payee").
+function isInstallmentFinished(bill, paidCount, rolledDueDate) {
+  const monthly = Number(bill.amount) || 0;
+  const total = Number(bill.installmentTotal) || 0;
+  if (total > 0 && paidCount * monthly >= total) return true;
+  if (bill.installmentEndDate && new Date(rolledDueDate) > new Date(bill.installmentEndDate)) return true;
+  return false;
+}
+
 async function rolloverIfDue(bill) {
   if (!bill.recurring || !isFromPastMonth(bill.dueDate) || rolloverInFlight.has(bill.id)) return;
   rolloverInFlight.add(bill.id);
   try {
-    await updateDoc(doc(db, "bills", bill.id), {
-      dueDate: rollDueDateToCurrentMonth(bill.dueDate),
+    const rolledDueDate = rollDueDateToCurrentMonth(bill.dueDate);
+    const patch = {
+      dueDate: rolledDueDate,
       status: "pending",
       paidBy: [],
       updatedAt: serverTimestamp()
-    });
+    };
+    if (bill.installment) {
+      const paidCount = (Number(bill.installmentsPaid) || 0) + (bill.status === "paid" ? 1 : 0);
+      patch.installmentsPaid = paidCount;
+      if (isInstallmentFinished(bill, paidCount, rolledDueDate)) {
+        patch.recurring = false;
+        patch.installmentCompleted = true;
+        patch.dueDate = bill.dueDate;
+        patch.status = bill.status === "paid" ? "paid" : "pending";
+      }
+    }
+    await updateDoc(doc(db, "bills", bill.id), patch);
   } finally {
     rolloverInFlight.delete(bill.id);
   }
@@ -68,6 +91,7 @@ export function getDisplayStatus(bill) {
 }
 
 export async function addBill(householdId, profile, data) {
+  const installment = !!data.installment;
   await addDoc(collection(db, "bills"), {
     householdId,
     profileId: profile.id,
@@ -75,7 +99,16 @@ export async function addBill(householdId, profile, data) {
     amount: Number(data.amount) || 0,
     dueDate: data.dueDate,
     category: data.category || "Autre",
-    recurring: !!data.recurring,
+    recurring: installment ? true : !!data.recurring,
+    split: !!data.split,
+    personal: !!data.personal,
+    assignedTo: data.personal ? data.assignedTo || null : null,
+    installment,
+    installmentTotal: installment ? Number(data.installmentTotal) || 0 : null,
+    installmentStartDate: installment ? data.installmentStartDate || null : null,
+    installmentEndDate: installment ? data.installmentEndDate || null : null,
+    installmentsPaid: 0,
+    installmentCompleted: false,
     status: "pending",
     paidBy: [],
     updatedAt: serverTimestamp(),
@@ -85,16 +118,60 @@ export async function addBill(householdId, profile, data) {
 }
 
 export async function updateBill(householdId, profile, billId, data) {
+  const installment = !!data.installment;
   await updateDoc(doc(db, "bills", billId), {
     title: data.title.trim(),
     amount: Number(data.amount) || 0,
     dueDate: data.dueDate,
     category: data.category || "Autre",
-    recurring: !!data.recurring,
+    recurring: installment ? true : !!data.recurring,
+    split: !!data.split,
+    personal: !!data.personal,
+    assignedTo: data.personal ? data.assignedTo || null : null,
+    installment,
+    installmentTotal: installment ? Number(data.installmentTotal) || 0 : null,
+    installmentStartDate: installment ? data.installmentStartDate || null : null,
+    installmentEndDate: installment ? data.installmentEndDate || null : null,
     updatedAt: serverTimestamp(),
     updatedBy: profile.name
   });
   await logActivity(householdId, profile.id, profile.name, "bill", `${profile.name} a modifie la facture ${data.title}`);
+}
+
+// Etat d'avancement d'un echeancier : montant deja rembourse, montant restant,
+// pourcentage et nombre de mensualites (les mensualites validees en base, plus le
+// mois en cours si deja marque paye mais pas encore reconduit).
+export function getInstallmentProgress(bill) {
+  const monthly = Number(bill.amount) || 0;
+  const total = Number(bill.installmentTotal) || 0;
+  const basePaidCount = Number(bill.installmentsPaid) || 0;
+  const currentCycleCounted = !bill.installmentCompleted && getDisplayStatus(bill) === "paid" ? 1 : 0;
+  const paidCount = basePaidCount + currentCycleCounted;
+  const paidAmount = total > 0 ? Math.min(total, paidCount * monthly) : paidCount * monthly;
+  const remaining = total > 0 ? Math.max(0, total - paidAmount) : 0;
+  const percent = total > 0 ? Math.min(100, Math.round((paidAmount / total) * 100)) : 0;
+  const totalCount = total > 0 && monthly > 0 ? Math.ceil(total / monthly) : null;
+  return { paidAmount, remaining, percent, paidCount, totalCount };
+}
+
+// Part de cette facture qui concerne ce profil, independamment de ce qui est deja
+// paye : 0 si c'est une facture personnelle assignee a quelqu'un d'autre, sa
+// quote-part si elle est partagee a parts egales, sinon le montant plein (facture
+// commune, tout le monde est concerne pour la totalite).
+export function getProfileAmount(bill, profileName, profileCount) {
+  const amount = Number(bill.amount) || 0;
+  if (bill.personal) return bill.assignedTo === profileName ? amount : 0;
+  if (bill.split && profileCount > 0) return amount / profileCount;
+  return amount;
+}
+
+// Part que doit encore regler ce profil sur cette facture. Retourne 0 des que la
+// facture est payee, que le profil n'est pas concerne, ou qu'il a deja valide.
+export function getOwedShare(bill, profileName, profileCount) {
+  if (getDisplayStatus(bill) === "paid") return 0;
+  if (bill.personal && bill.assignedTo !== profileName) return 0;
+  if (!bill.personal && (bill.paidBy || []).includes(profileName)) return 0;
+  return getProfileAmount(bill, profileName, profileCount);
 }
 
 export async function togglePaidBy(householdId, profile, bill, allProfileNames) {

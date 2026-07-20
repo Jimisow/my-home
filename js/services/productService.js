@@ -38,6 +38,7 @@ export async function addProduct(householdId, profile, data) {
     householdId,
     profileId: profile.id,
     name: data.name.trim(),
+    category: data.category || "Autre",
     hasQuantity: !!data.hasQuantity,
     quantity: data.hasQuantity ? Number(data.quantity) || 0 : null,
     threshold: data.hasQuantity ? Number(data.threshold) || 1 : null,
@@ -54,6 +55,7 @@ export async function addProduct(householdId, profile, data) {
 export async function updateProduct(householdId, profile, productId, data) {
   const patch = {
     name: data.name.trim(),
+    category: data.category || "Autre",
     hasQuantity: !!data.hasQuantity,
     quantity: data.hasQuantity ? Number(data.quantity) || 0 : null,
     threshold: data.hasQuantity ? Number(data.threshold) || 1 : null,

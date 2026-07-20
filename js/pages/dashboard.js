@@ -2,8 +2,9 @@
 import { registerPage, navigate } from "../router.js";
 import { state, trackSubscription } from "../state.js";
 import { watchProducts } from "../services/productService.js";
-import { watchBills, getDisplayStatus as getBillStatus } from "../services/billService.js";
+import { watchBills, getOwedShare } from "../services/billService.js";
 import { watchMeetings, getDisplayStatus as getMeetingStatus } from "../services/meetingService.js";
+import { watchProfiles } from "../services/profileService.js";
 import { watchNotes } from "../services/noteService.js";
 import { watchRecentActivities } from "../services/activityService.js";
 import { escapeHtml, formatAmount, timeAgo } from "../utils.js";
@@ -21,7 +22,7 @@ function mount(root) {
         <button class="widget-card" data-page="factures">
           <span class="widget-icon">💳</span>
           <span class="widget-value" id="widget-factures">-</span>
-          <span class="widget-label">A payer</span>
+          <span class="widget-label">Mon reste a payer</span>
         </button>
         <button class="widget-card" data-page="rendezvous">
           <span class="widget-icon">📅</span>
@@ -60,11 +61,23 @@ function mount(root) {
     root.querySelector("#widget-courses").textContent = count;
   }));
 
-  trackSubscription(watchBills(state.householdId, (bills) => {
-    const total = bills
-      .filter((b) => getBillStatus(b) !== "paid")
-      .reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
-    root.querySelector("#widget-factures").textContent = formatAmount(total);
+  let bills = [];
+  let profileCount = 0;
+
+  function renderMyDue() {
+    if (!state.profile) return;
+    const owed = bills.reduce((sum, b) => sum + getOwedShare(b, state.profile.name, profileCount), 0);
+    root.querySelector("#widget-factures").textContent = formatAmount(owed);
+  }
+
+  trackSubscription(watchBills(state.householdId, (data) => {
+    bills = data;
+    renderMyDue();
+  }));
+
+  trackSubscription(watchProfiles(state.householdId, (profiles) => {
+    profileCount = profiles.length;
+    renderMyDue();
   }));
 
   trackSubscription(watchMeetings(state.householdId, (meetings) => {
